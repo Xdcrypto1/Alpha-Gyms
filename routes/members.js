@@ -15,6 +15,16 @@ const PLAN_DURATIONS = {
 // Get all members
 router.get("/", protect, async (req, res) => {
   try {
+    // Keep membership status accurate even if the daily cron has not run yet.
+    await pool.query(
+      `UPDATE members
+       SET status = 'expired'
+       WHERE gym_id = $1
+       AND status = 'active'
+       AND expiry_date < CURRENT_DATE`,
+      [req.gymId]
+    );
+
     const result = await pool.query(
       "SELECT * FROM members WHERE gym_id = $1 ORDER BY expiry_date ASC",
       [req.gymId]
@@ -28,27 +38,66 @@ router.get("/", protect, async (req, res) => {
 
 // Add member manually
 router.post("/", protect, async (req, res) => {
-  const { name, email, plan, amount, payment_method, payment_reference, whatsapp } = req.body;
+  const {
+    name,
+    email,
+    plan,
+    amount,
+    payment_method,
+    payment_reference,
+    whatsapp,
+    sex,
+    date_of_birth,
+    start_date,
+  } = req.body;
 
   if (!name || !plan) {
     return res.status(400).json({ error: "Name and plan are required" });
   }
 
-  const durationDays = PLAN_DURATIONS[plan] || 30;
-  const start_date = new Date();
-  const expiry_date = new Date();
-  expiry_date.setDate(expiry_date.getDate() + durationDays);
+  const membershipStartDate = start_date || new Date().toISOString().split("T")[0];
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(membershipStartDate)) {
+    return res.status(400).json({ error: "Invalid membership start date" });
+  }
+
+  if (date_of_birth && !/^\d{4}-\d{2}-\d{2}$/.test(date_of_birth)) {
+    return res.status(400).json({ error: "Invalid birthday" });
+  }
 
   try {
+    // Read the actual duration from this gym's plan instead of relying on hard-coded
+    // plan names. This also makes custom plans work correctly.
+    const planResult = await pool.query(
+      "SELECT duration_days, amount FROM plans WHERE gym_id = $1 AND name = $2",
+      [req.gymId, plan]
+    );
+
+    if (planResult.rows.length === 0) {
+      return res.status(400).json({ error: "Selected membership plan was not found" });
+    }
+
+    const durationDays = Number(planResult.rows[0].duration_days) || 30;
+    const memberAmount = amount ?? planResult.rows[0].amount;
+
     const result = await pool.query(
-      `INSERT INTO members 
-        (name, email, plan, amount, start_date, expiry_date, payment_method, payment_reference, gym_id, whatsapp)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `INSERT INTO members
+        (name, email, plan, amount, start_date, expiry_date, payment_method, payment_reference, gym_id, whatsapp, sex, date_of_birth)
+       VALUES ($1, $2, $3, $4, $5::date, ($5::date + ($6 * INTERVAL '1 day')), $7, $8, $9, $10, $11, $12)
        RETURNING *`,
       [
-        name, email, plan, amount, start_date, expiry_date,
-        payment_method || "cash", payment_reference || null,
-        req.gymId, whatsapp || null,
+        name.trim(),
+        email || null,
+        plan,
+        memberAmount,
+        membershipStartDate,
+        durationDays,
+        payment_method || "cash",
+        payment_reference || null,
+        req.gymId,
+        whatsapp || null,
+        sex || null,
+        date_of_birth || null,
       ]
     );
     res.status(201).json(result.rows[0]);
@@ -156,6 +205,18 @@ router.delete("/:id", protect, async (req, res) => {
 // Stats
 router.get("/stats", protect, async (req, res) => {
   try {
+    // Keep status in sync even if the daily cron has not run yet.
+    // This prevents expired members from remaining in the active list
+    // and makes the revenue-lost figure accurate on dashboard load.
+    await pool.query(
+      `UPDATE members
+       SET status = 'expired'
+       WHERE gym_id = $1
+       AND status = 'active'
+       AND expiry_date < CURRENT_DATE`,
+      [req.gymId]
+    );
+
     const totalResult = await pool.query(
       "SELECT COUNT(*) FROM members WHERE gym_id = $1 AND status = 'active'",
       [req.gymId]
@@ -314,3 +375,5 @@ router.post("/remind-all", protect, async (req, res) => {
 });
 
 export default router;
+
+
