@@ -92,7 +92,7 @@ router.post("/", protect, async (req, res) => {
         memberAmount,
         membershipStartDate,
         durationDays,
-        payment_method || "cash",
+        "transfer",
         payment_reference || null,
         req.gymId,
         whatsapp || null,
@@ -206,8 +206,7 @@ router.delete("/:id", protect, async (req, res) => {
 router.get("/stats", protect, async (req, res) => {
   try {
     // Keep status in sync even if the daily cron has not run yet.
-    // This prevents expired members from remaining in the active list
-    // and makes the revenue-lost figure accurate on dashboard load.
+    // This prevents expired members from remaining in the active list.
     await pool.query(
       `UPDATE members
        SET status = 'expired'
@@ -240,15 +239,6 @@ router.get("/stats", protect, async (req, res) => {
       [req.gymId]
     );
 
-    const revenueLostResult = await pool.query(
-      `SELECT COALESCE(SUM(amount), 0) as total
-       FROM members 
-       WHERE gym_id = $1 
-       AND status = 'expired'
-       AND expiry_date >= CURRENT_DATE - INTERVAL '30 days'`,
-      [req.gymId]
-    );
-
     const expiredResult = await pool.query(
       `SELECT * FROM members
        WHERE gym_id = $1
@@ -275,7 +265,6 @@ router.get("/stats", protect, async (req, res) => {
       totalActive: parseInt(totalResult.rows[0].count),
       expiringThisWeek: expiringResult.rows,
       revenueAtRisk: parseInt(revenueAtRiskResult.rows[0].total),
-      revenueLost: parseInt(revenueLostResult.rows[0].total),
       expiredMembers: expiredResult.rows,
       recoveryRate,
     });
@@ -375,5 +364,3 @@ router.post("/remind-all", protect, async (req, res) => {
 });
 
 export default router;
-
-
