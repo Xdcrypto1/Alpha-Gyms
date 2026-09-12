@@ -107,6 +107,51 @@ router.post("/", protect, async (req, res) => {
   }
 });
 
+// Edit safe member profile fields only. Membership/financial fields are intentionally excluded.
+router.put("/:id/profile", protect, async (req, res) => {
+  const { id } = req.params;
+  const { name, email, whatsapp, sex, date_of_birth } = req.body;
+
+  if (!name || !name.trim()) {
+    return res.status(400).json({ error: "Name is required" });
+  }
+
+  if (date_of_birth && !/^\d{4}-\d{2}-\d{2}$/.test(date_of_birth)) {
+    return res.status(400).json({ error: "Invalid birthday" });
+  }
+
+  try {
+    const result = await pool.query(
+      `UPDATE members
+       SET name = $1,
+           email = $2,
+           whatsapp = $3,
+           sex = $4,
+           date_of_birth = $5::date
+       WHERE id = $6 AND gym_id = $7
+       RETURNING *`,
+      [
+        name.trim(),
+        email?.trim() || null,
+        whatsapp?.trim() || null,
+        sex || null,
+        date_of_birth || null,
+        id,
+        req.gymId,
+      ]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Member not found" });
+    }
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to update member information" });
+  }
+});
+
 // Update member status
 router.patch("/:id", protect, async (req, res) => {
   const { id } = req.params;
