@@ -339,7 +339,20 @@ router.post("/:id/remind", protect, async (req, res) => {
     if (member.whatsapp) {
       const number = member.whatsapp.replace(/^0/, "234").replace(/\D/g, "");
       const message = encodeURIComponent(
-        `Hi ${member.name} 👋, your *${member.plan}* membership at our gym expires in *${daysLeft} day${daysLeft !== 1 ? "s" : ""}*. Renew now to keep your access 💪`
+        `MEMBERSHIP RENEWAL REMINDER 🚨
+
+Hi! ${member.name}, Just a quick reminder that your gym membership expires TODAY.
+
+⚠️ TODAY IS THE LAST DAY of your current *${member.plan}* subscription. To continue working out from tomorrow, you’ll need to renew your membership.
+
+You can renew conveniently online here: 
+Account name: Alpha Gym and more
+Account number: 1029797162
+Bank: UBA
+
+Or make your payment at the front desk.
+
+Alpha Gym Management.`
       );
       return res.json({ whatsappUrl: `https://wa.me/${number}?text=${message}` });
     }
@@ -381,7 +394,20 @@ router.post("/remind-all", protect, async (req, res) => {
       if (member.whatsapp) {
         const number = member.whatsapp.replace(/^0/, "234").replace(/\D/g, "");
         const message = encodeURIComponent(
-          `Hi ${member.name} 👋, your *${member.plan}* membership expires in *${daysLeft} day${daysLeft !== 1 ? "s" : ""}*. Renew now to keep your access 💪`
+          `MEMBERSHIP RENEWAL REMINDER 🚨
+
+          Hi! ${member.name}, Just a quick reminder that your gym membership expires TODAY.
+
+          ⚠️ TODAY IS THE LAST DAY of your current *${member.plan}* subscription. To continue working out from tomorrow, you’ll need to renew your membership.
+
+          You can renew conveniently online here: 
+          Account name: Alpha Gym and more
+          Account number: 1029797162
+          Bank: UBA
+
+          Or make your payment at the front desk.
+
+          Alpha Gym Management.`
         );
         whatsappLinks.push({
           name: member.name,
