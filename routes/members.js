@@ -55,7 +55,8 @@ router.post("/", protect, async (req, res) => {
     return res.status(400).json({ error: "Name and plan are required" });
   }
 
-  const membershipStartDate = start_date || new Date().toISOString().split("T")[0];
+  const membershipStartDate =
+    start_date || new Date().toISOString().split("T")[0];
 
   if (!/^\d{4}-\d{2}-\d{2}$/.test(membershipStartDate)) {
     return res.status(400).json({ error: "Invalid membership start date" });
@@ -74,10 +75,24 @@ router.post("/", protect, async (req, res) => {
     );
 
     if (planResult.rows.length === 0) {
-      return res.status(400).json({ error: "Selected membership plan was not found" });
+      return res.status(400).json({
+        error: "Selected membership plan was not found",
+      });
     }
 
-    const durationDays = Number(planResult.rows[0].duration_days) || 30;
+    // Monthly memberships use the number of days in the registration month - 1.
+    // All other plans continue using their configured duration_days.
+    let durationDays;
+
+    if (plan === "Monthly") {
+      const [year, month] = membershipStartDate.split("-").map(Number);
+      const daysInMonth = new Date(year, month, 0).getDate();
+
+      durationDays = daysInMonth - 1;
+    } else {
+      durationDays = Number(planResult.rows[0].duration_days) || 30;
+    }
+
     const memberAmount = amount ?? planResult.rows[0].amount;
 
     const result = await pool.query(
@@ -100,6 +115,7 @@ router.post("/", protect, async (req, res) => {
         date_of_birth || null,
       ]
     );
+
     res.status(201).json(result.rows[0]);
   } catch (error) {
     console.error(error);
@@ -148,7 +164,9 @@ router.put("/:id/profile", protect, async (req, res) => {
     res.json(result.rows[0]);
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: "Failed to update member information" });
+    res.status(500).json({
+      error: "Failed to update member information",
+    });
   }
 });
 
@@ -162,6 +180,7 @@ router.patch("/:id", protect, async (req, res) => {
       "UPDATE members SET status = $1 WHERE id = $2 AND gym_id = $3 RETURNING *",
       [status, id, req.gymId]
     );
+
     res.json(result.rows[0]);
   } catch (error) {
     console.error(error);
@@ -196,29 +215,55 @@ router.post("/:id/reactivate", protect, async (req, res) => {
       [req.gymId, activePlan]
     );
 
+    const start_date = new Date();
+
     let durationDays;
-    if (planResult.rows.length > 0) {
+
+    // Monthly memberships use the number of days in the renewal month - 1.
+    if (activePlan === "Monthly") {
+      const year = start_date.getFullYear();
+      const month = start_date.getMonth() + 1;
+
+      // Get number of days in the current month.
+      const daysInMonth = new Date(year, month, 0).getDate();
+
+      durationDays = daysInMonth - 1;
+    } else if (planResult.rows.length > 0) {
+      // All other plans continue using their configured duration.
       durationDays = planResult.rows[0].duration_days;
     } else {
       durationDays = PLAN_DURATIONS[activePlan] || 30;
     }
 
-    const start_date = new Date();
-    const expiry_date = new Date();
+    const expiry_date = new Date(start_date);
     expiry_date.setDate(expiry_date.getDate() + durationDays);
 
     const result = await pool.query(
       `UPDATE members 
-       SET status = 'active', plan = $1, amount = $2, start_date = $3, expiry_date = $4, payment_method = 'renewal'
+       SET status = 'active',
+           plan = $1,
+           amount = $2,
+           start_date = $3,
+           expiry_date = $4,
+           payment_method = 'renewal'
        WHERE id = $5 AND gym_id = $6
        RETURNING *`,
-      [activePlan, activeAmount, start_date, expiry_date, id, req.gymId]
+      [
+        activePlan,
+        activeAmount,
+        start_date,
+        expiry_date,
+        id,
+        req.gymId,
+      ]
     );
 
     res.json(result.rows[0]);
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: "Failed to reactivate member" });
+    res.status(500).json({
+      error: "Failed to reactivate member",
+    });
   }
 });
 
@@ -228,11 +273,15 @@ router.delete("/:id", protect, async (req, res) => {
   const { delete_code } = req.body;
 
   if (!delete_code) {
-    return res.status(400).json({ error: "Delete code is required" });
+    return res.status(400).json({
+      error: "Delete code is required",
+    });
   }
 
   if (delete_code !== process.env.DELETE_CODE) {
-    return res.status(403).json({ error: "Incorrect delete code" });
+    return res.status(403).json({
+      error: "Incorrect delete code",
+    });
   }
 
   try {
@@ -240,10 +289,13 @@ router.delete("/:id", protect, async (req, res) => {
       "DELETE FROM members WHERE id = $1 AND gym_id = $2",
       [id, req.gymId]
     );
+
     res.json({ message: "Member deleted" });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: "Failed to delete member" });
+    res.status(500).json({
+      error: "Failed to delete member",
+    });
   }
 });
 
@@ -302,9 +354,11 @@ router.get("/stats", protect, async (req, res) => {
 
     const expiredCount = expiredResult.rows.length;
     const totalRecovered = parseInt(recoveredResult.rows[0].count);
-    const recoveryRate = expiredCount > 0
-      ? Math.round((totalRecovered / expiredCount) * 100)
-      : 0;
+
+    const recoveryRate =
+      expiredCount > 0
+        ? Math.round((totalRecovered / expiredCount) * 100)
+        : 0;
 
     res.json({
       totalActive: parseInt(totalResult.rows[0].count),
@@ -315,7 +369,9 @@ router.get("/stats", protect, async (req, res) => {
     });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: "Failed to fetch stats" });
+    res.status(500).json({
+      error: "Failed to fetch stats",
+    });
   }
 });
 
@@ -328,16 +384,24 @@ router.post("/:id/remind", protect, async (req, res) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: "Member not found" });
+      return res.status(404).json({
+        error: "Member not found",
+      });
     }
 
     const member = result.rows[0];
     const expiry = new Date(member.expiry_date);
     const today = new Date();
-    const daysLeft = Math.ceil((expiry - today) / (1000 * 60 * 60 * 24));
+
+    const daysLeft = Math.ceil(
+      (expiry - today) / (1000 * 60 * 60 * 24)
+    );
 
     if (member.whatsapp) {
-      const number = member.whatsapp.replace(/^0/, "234").replace(/\D/g, "");
+      const number = member.whatsapp
+        .replace(/^0/, "234")
+        .replace(/\D/g, "");
+
       const message = encodeURIComponent(
         `MEMBERSHIP RENEWAL REMINDER 🚨
 
@@ -354,7 +418,10 @@ Or make your payment at the front desk.
 
 Alpha Gym Management.`
       );
-      return res.json({ whatsappUrl: `https://wa.me/${number}?text=${message}` });
+
+      return res.json({
+        whatsappUrl: `https://wa.me/${number}?text=${message}`,
+      });
     }
 
     await sendReminder({
@@ -365,10 +432,14 @@ Alpha Gym Management.`
       daysLeft,
     });
 
-    res.json({ message: "Reminder sent via email" });
+    res.json({
+      message: "Reminder sent via email",
+    });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: "Failed to send reminder" });
+    res.status(500).json({
+      error: "Failed to send reminder",
+    });
   }
 });
 
@@ -389,10 +460,16 @@ router.post("/remind-all", protect, async (req, res) => {
     for (const member of members) {
       const expiry = new Date(member.expiry_date);
       const today = new Date();
-      const daysLeft = Math.ceil((expiry - today) / (1000 * 60 * 60 * 24));
+
+      const daysLeft = Math.ceil(
+        (expiry - today) / (1000 * 60 * 60 * 24)
+      );
 
       if (member.whatsapp) {
-        const number = member.whatsapp.replace(/^0/, "234").replace(/\D/g, "");
+        const number = member.whatsapp
+          .replace(/^0/, "234")
+          .replace(/\D/g, "");
+
         const message = encodeURIComponent(
           `MEMBERSHIP RENEWAL REMINDER 🚨
 
@@ -409,6 +486,7 @@ router.post("/remind-all", protect, async (req, res) => {
 
           Alpha Gym Management.`
         );
+
         whatsappLinks.push({
           name: member.name,
           url: `https://wa.me/${number}?text=${message}`,
@@ -430,7 +508,9 @@ router.post("/remind-all", protect, async (req, res) => {
     });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: "Failed to send reminders" });
+    res.status(500).json({
+      error: "Failed to send reminders",
+    });
   }
 });
 
