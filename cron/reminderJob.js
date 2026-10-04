@@ -21,6 +21,26 @@ const startReminderJob = () => {
         console.log(`Auto expired ${expired.rows.length} members`);
       }
 
+      // Archive members who have remained expired for at least 15 days.
+      // The DELETE + INSERT runs as one database statement, so a member is
+      // never removed from members unless the archive insert succeeds.
+      const archived = await pool.query(
+        `WITH moved AS (
+           DELETE FROM members
+           WHERE status = 'expired'
+           AND expiry_date <= CURRENT_DATE - INTERVAL '15 days'
+           RETURNING *
+         )
+         INSERT INTO member_archive
+         SELECT moved.*, NOW(), 'membership_expired_15_days'
+         FROM moved
+         RETURNING id, name, gym_id`
+      );
+
+      if (archived.rows.length > 0) {
+        console.log(`Archived ${archived.rows.length} members expired 15+ days`);
+      }
+
       // Send reminders to members expiring in 7 days or less
       const result = await pool.query(
         `SELECT * FROM members 
