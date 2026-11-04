@@ -12,6 +12,61 @@ const PLAN_DURATIONS = {
   "Annual": 365,
 };
 
+// Membership dates are calendar dates, not timestamps. Keep all calculations
+// in YYYY-MM-DD form so server/UTC timezone conversions cannot shift a day.
+const getLagosDateOnly = () => {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Africa/Lagos",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  return `${values.year}-${values.month}-${values.day}`;
+};
+
+const isValidDateOnly = (value) => {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  );
+};
+
+const addDaysToDateOnly = (dateOnly, days) => {
+  const [year, month, day] = dateOnly.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day + days));
+
+  return [
+    date.getUTCFullYear(),
+    String(date.getUTCMonth() + 1).padStart(2, "0"),
+    String(date.getUTCDate()).padStart(2, "0"),
+  ].join("-");
+};
+
+// Monthly memberships last (days in their start month - 1) days.
+// Other plans retain the duration configured for that gym's plan.
+const calculateExpiryDate = (startDate, planName, configuredDuration) => {
+  let durationDays;
+
+  if (planName === "Monthly") {
+    const [year, month] = startDate.split("-").map(Number);
+    durationDays = new Date(Date.UTC(year, month, 0)).getUTCDate() - 1;
+  } else {
+    durationDays = Number(configuredDuration) || 30;
+  }
+
+  return addDaysToDateOnly(startDate, durationDays);
+};
+
 // Get all members
 router.get("/", protect, async (req, res) => {
   try {
@@ -55,10 +110,9 @@ router.post("/", protect, async (req, res) => {
     return res.status(400).json({ error: "Name and plan are required" });
   }
 
-  const membershipStartDate =
-    start_date || new Date().toISOString().split("T")[0];
+  const membershipStartDate = start_date || getLagosDateOnly();
 
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(membershipStartDate)) {
+  if (!isValidDateOnly(membershipStartDate)) {
     return res.status(400).json({ error: "Invalid membership start date" });
   }
 
@@ -80,25 +134,18 @@ router.post("/", protect, async (req, res) => {
       });
     }
 
-    // Monthly memberships use the number of days in the registration month - 1.
-    // All other plans continue using their configured duration_days.
-    let durationDays;
-
-    if (plan === "Monthly") {
-      const [year, month] = membershipStartDate.split("-").map(Number);
-      const daysInMonth = new Date(year, month, 0).getDate();
-
-      durationDays = daysInMonth - 1;
-    } else {
-      durationDays = Number(planResult.rows[0].duration_days) || 30;
-    }
+    const expiryDate = calculateExpiryDate(
+      membershipStartDate,
+      plan,
+      planResult.rows[0].duration_days
+    );
 
     const memberAmount = amount ?? planResult.rows[0].amount;
 
     const result = await pool.query(
       `INSERT INTO members
         (name, email, plan, amount, start_date, expiry_date, payment_method, payment_reference, gym_id, whatsapp, sex, date_of_birth)
-       VALUES ($1, $2, $3, $4, $5::date, ($5::date + ($6 * INTERVAL '1 day')), $7, $8, $9, $10, $11, $12)
+       VALUES ($1, $2, $3, $4, $5::date, $6::date, $7, $8, $9, $10, $11, $12)
        RETURNING *`,
       [
         name.trim(),
@@ -106,7 +153,7 @@ router.post("/", protect, async (req, res) => {
         plan,
         memberAmount,
         membershipStartDate,
-        durationDays,
+        expiryDate,
         "transfer",
         payment_reference || null,
         req.gymId,
@@ -215,36 +262,24 @@ router.post("/:id/reactivate", protect, async (req, res) => {
       [req.gymId, activePlan]
     );
 
-    const start_date = new Date();
-
-    let durationDays;
-
-    // Monthly memberships use the number of days in the renewal month - 1.
-    if (activePlan === "Monthly") {
-      const year = start_date.getFullYear();
-      const month = start_date.getMonth() + 1;
-
-      // Get number of days in the current month.
-      const daysInMonth = new Date(year, month, 0).getDate();
-
-      durationDays = daysInMonth - 1;
-    } else if (planResult.rows.length > 0) {
-      // All other plans continue using their configured duration.
-      durationDays = planResult.rows[0].duration_days;
-    } else {
-      durationDays = PLAN_DURATIONS[activePlan] || 30;
-    }
-
-    const expiry_date = new Date(start_date);
-    expiry_date.setDate(expiry_date.getDate() + durationDays);
+    const start_date = getLagosDateOnly();
+    const configuredDuration =
+      planResult.rows.length > 0
+        ? planResult.rows[0].duration_days
+        : PLAN_DURATIONS[activePlan] || 30;
+    const expiry_date = calculateExpiryDate(
+      start_date,
+      activePlan,
+      configuredDuration
+    );
 
     const result = await pool.query(
       `UPDATE members 
        SET status = 'active',
            plan = $1,
            amount = $2,
-           start_date = $3,
-           expiry_date = $4,
+           start_date = $3::date,
+           expiry_date = $4::date,
            payment_method = 'renewal'
        WHERE id = $5 AND gym_id = $6
        RETURNING *`,
